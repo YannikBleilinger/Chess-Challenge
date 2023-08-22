@@ -6,244 +6,117 @@ using System.Diagnostics;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
-//todo: bot macht illegale züge (vorallem im Schach)
-//todo: implement quiescence Search
+//todo: transpos table
+//todo: iterative deepening
+//todo: king safety and endgame ? 
+//todo: 
 public class MyBot : IChessBot
 {
-    // Piece values: null, pawn, knight, bishop, rook, queen, king
-    int[] pieceValues = { 0, 100, 320, 330, 500, 900, 20000 };
-    const int MAX_DEPHT = 20; // You can adjust this value depending on how much time you have.
+    //settings
+    private const int MAX_DEPTH = 7;
+    private const int infinity = 99999999;
     private const int MAX_ENTRIES = 13000000;
-    private bool isWhite;
-    private int timeLimit = 10000;
-    private Move lastBestMove = Move.NullMove;
-
-    private Dictionary<ulong, TranspositionEntry> transpositionTable = new();
-
-    //Controll variables
+    
+    //control variables
     private int evaluatedPositions;
-    private int transposCutoffs;
-    private int reachedDepth;
+
+    private int cutoffAlphaBeta;
+
+    private int cutoffTT;
+    //manditory variables
+    Move bestMoveThisPosition = Move.NullMove;
+    Move bestMoveThisIteration = Move.NullMove;
+    int[] pieceValues = {100,320,330,500,900,20000};
+    private Dictionary<ulong, TranspositionEntry> transpositionTable = new();
     
     public Move Think(Board board, Timer timer)
     {
-        //weiß ist maximising, schwarz ist minimizing spieler
-        timeLimit = (int)Math.Round(timer.IncrementMilliseconds + timer.MillisecondsRemaining * 0.075);
-        isWhite = board.IsWhiteToMove;
         evaluatedPositions = 0;
-        transposCutoffs = 0;
-        reachedDepth = 0;
+        cutoffAlphaBeta = 0;
+        cutoffTT = 0;
         
-        //Starte iterative tiefensuche
-        var (bestMove, bestEval) = IterativeDeepening(board,timer);
-        Console.WriteLine("Evaluated {0} Positions,Reached Depth: {4}, Transposition Cutoffs: {1}, Best value: {2}, Best Move: {3}",evaluatedPositions,transposCutoffs,bestEval,bestMove,reachedDepth);
-        //Console.WriteLine(board.CreateDiagram());
-        if (!board.GetLegalMoves().Contains(bestMove))
-        {
-            Console.BackgroundColor = ConsoleColor.Red;
-            Console.WriteLine("Move ist nicht legal du Nutte. Was gespielt werden wollte: " + bestMove);
-            Console.BackgroundColor = ConsoleColor.Gray;
-            bestMove = board.GetLegalMoves()[0];
-        }
-        lastBestMove = bestMove;
-        
-        return bestMove;
+        Search(board, MAX_DEPTH, -infinity, infinity,0);
+
+        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
+        Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
+        return bestMoveThisIteration;
     }
 
-    private (Move,int) AlphaBeta(Board board, int depth, int alpha, int beta, bool maximizingPlayer, Timer timer)
+    private int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
     {
-        Move[] legalMoves = board.GetLegalMoves();
-        legalMoves = OrderMoves(legalMoves, board);
-        
-        if (depth == 0 || legalMoves.Length == 0)
-        {
-            return (Move.NullMove, evaluate(board, depth));
-        }
-
-        Move bestMove = Move.NullMove;
-        //Fallunterscheidung je nach Spieler
-        if (maximizingPlayer)
-        {
-            int maxEval = int.MinValue;
-            foreach (var move in legalMoves)
-            {
-                if (timer.MillisecondsElapsedThisTurn >= timeLimit)
-                {
-                    return (bestMove, maxEval);
-                }
-                
-                board.MakeMove(move);
-                
-                var (childMove, eval) = AlphaBeta(board, depth - 1, alpha, beta, false,timer);
-                if (eval > maxEval)
-                {
-                    maxEval = eval;
-                    bestMove = move;
-                }
-
-                alpha = Math.Max(alpha, eval);
-
-                board.UndoMove(move);
-
-                if (beta <= alpha)
-                {
-                    transposCutoffs++;
-                    break;
-                }
-
-               
-            }
-            return (bestMove, maxEval);
-        }
-        else
-        {
-            int minEval = int.MaxValue;
-            foreach (var move in legalMoves)
-            {
-                if (timer.MillisecondsElapsedThisTurn >= timeLimit)
-                {
-                    return (bestMove, minEval);
-                }
-               
-                board.MakeMove(move);
-               
-               var (childMove, eval) = AlphaBeta(board, depth - 1, alpha, beta, true,timer);
-               if (eval < minEval)
-               {
-                   minEval = eval;
-                   bestMove = move;
-               }
-
-               beta = Math.Min(beta, eval);
-               board.UndoMove(move);
-
-               if (beta <= alpha)
-               {
-                   transposCutoffs++;
-                   break;
-               }
-            }
-
-            return (bestMove, minEval);
-        }
-    }
-
-    private (Move, int) IterativeDeepening(Board board, Timer timer)
-    {
-        Move bestMove = Move.NullMove;
-        var bestEval = 0;
-        for (int depht = 1; depht < MAX_DEPHT; depht++)
-        {
-            if (timer.MillisecondsElapsedThisTurn >= timeLimit)
-            {
-                break;
-            }
-
-            var (move, eval) = AlphaBeta(board, depht, int.MinValue, int.MaxValue, isWhite,timer);
-            bestMove = move;
-            bestEval = eval;
-            reachedDepth++;
-        }
-
-        return (bestMove,bestEval);
-    }
-
-    private int evaluate(Board board, int remainingDepth)
-    {
-        evaluatedPositions++;
-        //check if position was evaluated before
+        //searches if position has been evaluated before, if so the positions evaluation and move is read from the
+        //transposition table
         var zobrisKey = board.ZobristKey;
-        if (transpositionTable.ContainsKey(zobrisKey) && transpositionTable[zobrisKey].Depht >= remainingDepth)
+        if (transpositionTable.ContainsKey(zobrisKey) && transpositionTable[zobrisKey].Depht >= depth)
         {
-            transposCutoffs++;
+            cutoffTT++;
+            if (plyFromRoot == 0)
+            {
+                bestMoveThisIteration = transpositionTable[zobrisKey].Move;
+            }
+
             return transpositionTable[zobrisKey].Value;
         }
-        if (board.IsInCheckmate())
-        {
-            return board.IsWhiteToMove ? Int32.MinValue : Int32.MaxValue;
-        }
         
-        if (board.IsInStalemate() || board.IsDraw())
+        //max. depth starts evaluating board position, todo: quisence serach
+        if (depth == 0) return Evaluate(board);
+        
+        Move[] moves = board.GetLegalMoves();
+        
+        if (moves.Length == 0 || board.IsDraw())
         {
+            if (board.IsInCheck()) return -9999999; //neg infinity
+
             return 0;
         }
 
-        int wPieceScore = 0, bPieceScore=0, wPawn=0, bPawn=0,wLegal=0,bLegal=0;
-        
-
-        ulong whitePawns = board.GetPieceBitboard(PieceType.Pawn, true);
-        ulong blackPawns = board.GetPieceBitboard(PieceType.Pawn, false);
-
-        for (int file = 0; file < 8; file++)
-        {
-            ulong fileMask = 0x0101010101010101UL << file;
-            if ((whitePawns & fileMask) != 0 && (whitePawns & fileMask) != (whitePawns & fileMask & (whitePawns & fileMask) - 1))
-            {
-                wPawn += 10;
-            }
-            if ((blackPawns & fileMask) != 0 && (blackPawns & fileMask) != (blackPawns & fileMask & (blackPawns & fileMask) - 1))
-            {
-                bPawn += 10;
-            }
-        }
-
-        //Amount of legal moves, leads to a more flexible position
-        wLegal += board.GetLegalMoves().Length * 5;  // Fügt 5 Punkte für jeden legalen weißen Zug hinzu.
-        bLegal += board.GetLegalMoves().Length * 5; // Fügt 5 Punkte für jeden legalen schwarzen Zug hinzu.
-
-
-        PieceList[] allPieces = board.GetAllPieceLists();
-        foreach (var pieceList in allPieces)
-        {
-            if (pieceList.Count > 0)
-            {
-                if (pieceList[0].IsWhite)
-                {
-                    wPieceScore += pieceValues[(int)pieceList[0].PieceType] * (pieceList.Count);
-                }
-                else
-                {
-                    bPieceScore += pieceValues[(int)pieceList[0].PieceType] * (pieceList.Count);
-                }
-            }
-        }
-        store(zobrisKey,new TranspositionEntry {Value = (short)(wPieceScore-bPieceScore),Depht = (byte)remainingDepth});
-        return 2*(wPieceScore - bPieceScore)+(wPawn-bPawn)+5*(wLegal-bLegal);
-    }
-
-    private Move[] OrderMoves(Move[] moves, Board board)
-    {
-        // Nehmen Sie den besten letzten Zug vorweg, falls er vorhanden ist
-        List<Move> orderedMoves = new List<Move>();
-        if (lastBestMove != Move.NullMove && moves.Contains(lastBestMove))
-        {
-            orderedMoves.Add(lastBestMove);
-        }
-
-        // Sortieren Sie die restlichen Züge
-        var sortedMoves = moves.OrderByDescending(move =>
+        foreach (var move in moves)
         {
             board.MakeMove(move);
-            int moveValue = 0;
-
-            if (board.IsInCheck())
-            {
-                moveValue = 10000;
-            }
-            else if (move.IsCapture)
-            {
-                moveValue = pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType] 
-                            - pieceValues[(int)board.GetPiece(move.StartSquare).PieceType];
-            }
+            var evaluation = -Search(board,depth - 1, -beta, -alpha,plyFromRoot+1);
             board.UndoMove(move);
-            return moveValue;
-        }).ToArray();
-
-        orderedMoves.AddRange(sortedMoves);
-
-        return orderedMoves.ToArray();
+            
+            //move is to good for the opposite side and gets pruned
+            if (evaluation >= beta)
+            {
+                cutoffAlphaBeta++;
+                return beta; //SNIPP
+            }
+            
+            if(evaluation>alpha)
+            {
+                bestMoveThisPosition = move;
+                alpha = evaluation;
+                if (plyFromRoot == 0)
+                {
+                    bestMoveThisIteration = move;
+                }
+            }
+        }
+        store(board.ZobristKey,new TranspositionEntry {Value = (short)alpha,Depht = (byte)depth, Move = bestMoveThisPosition});
+        return alpha;
     }
 
+    int Evaluate(Board board)
+    {
+        evaluatedPositions++;
+        return getMaterialDifference(board);
+    }
+
+    int getMaterialDifference(Board board)
+    {
+        var sum = 0;
+        PieceList[] pieceLists = board.GetAllPieceLists();
+        for (int i = 0; i < pieceLists.Length-1; i++)
+        {
+            if (i == 5) continue;
+            
+            sum += (i < 6) ? pieceLists[i].Count * pieceValues[i] : -pieceLists[i].Count * pieceValues[i-6];
+        }
+
+        return sum;
+    }
+    
     void store(ulong key, TranspositionEntry entry)
     {
         if (transpositionTable.Count >= MAX_ENTRIES)
@@ -259,4 +132,5 @@ public class TranspositionEntry
 {
     public short Value { get; set; }
     public byte Depht { get; set; }
+    public Move Move { get; set; }
 }
