@@ -1,48 +1,40 @@
 ﻿using ChessChallenge.API;
 using System;
+using System.Numerics;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
 
 //todo: iterative deepening
-//todo: king safety and endgame ?
-
-/// <summary>
-/// This chess bot was created as participation in the "Tiny chess bot challenge" by Sebastian Lague. It uses the API of the given Project that already implements all features of chess.
-/// This bot implements the following features (due to the restrictions of tokens in this challenge not all features can be implemented):
-/// For search:
-/// - Alpha-Beta Pruning
-/// - Move Ordering - after capture values, promotion
-/// - Transposition Tables
-/// - Todo: Quiescence Search
-/// - Todo: Iterative deepening
-/// For evaluation:
-/// - Material difference
-/// - Checkmate, Check or Draw
-/// - Todo: King safety
-/// - Todo: King for endgame
-/// </summary>
-public class MyBot : IChessBot
+//todo: king safety and endgame ? 
+public class EvilBotV3 : IChessBot
 {
     //settings
-    private const int MAX_DEPTH = 5;
+    private const int MAX_DEPTH = 20;
     private const int infinity = 99999999;
-    private const int timeLimit = 999999;
-    private const int TranspositionTableEntries = 100000;
+    private const int MAX_ENTRIES = 13000000;
+    private const int timeLimit = 100;
     
     //control variables
     private int evaluatedPositions;
+
     private int cutoffAlphaBeta;
+
     private int cutoffTT;
-    
+
+    private int quiescenceSearch;
     //manditory variables
-    Move bestMoveThisPosition = Move.NullMove;
-    Move bestMoveThisIteration = Move.NullMove;
-    private Move lastBestMove = Move.NullMove;
+    Move bestMoveThisPosition = Move.NullMove; //best move in a given position
+    Move bestMoveThisIteration = Move.NullMove; //best move in this whole iteration form a search
+    private Move bestLastMove = Move.NullMove; //move from each previous search from iterative deepening
     int[] pieceValues = {0,100,320,330,500,900,20000};
 
     private int[] moveValues;
-
-    private TranspositionEntry?[] TranspositionTable;
+    private bool searchCancelled;
+    
+    private Dictionary<ulong, TranspositionEntry> transpositionTable = new();
     
     public Move Think(Board board, Timer timer)
     {
@@ -50,55 +42,64 @@ public class MyBot : IChessBot
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
+        quiescenceSearch = 0;
         moveValues = new int[218];
-        TranspositionTable = new TranspositionEntry[TranspositionTableEntries];
         
-        Search(board, MAX_DEPTH, -infinity, infinity,0,timer);
-        //IterativeDeepening(board,timer);
+        //Search(board, MAX_DEPTH, -infinity, infinity,0,timer);
+        IterativeDeepening(board,timer);
 
-        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
-        Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
+        Console.WriteLine("EVIL: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}, Used Quiescence: {3}",evaluatedPositions, cutoffAlphaBeta, cutoffTT, quiescenceSearch);
+        Console.WriteLine("EVIL: Best move is: " + bestLastMove);
         //Console.WriteLine("Time took: "+ timer.MillisecondsElapsedThisTurn);
-        return bestMoveThisIteration;
+        return bestLastMove;
     }
-    
+
+    void IterativeDeepening(Board board, Timer timer)
+    {
+        for (int i = 1; i < MAX_DEPTH; i++)
+        {
+            Search(board, i, -infinity, infinity, 0, timer);
+            bestLastMove = bestMoveThisIteration;
+            bestMoveThisIteration = Move.NullMove;
+
+            if (timer.MillisecondsElapsedThisTurn >= timeLimit)
+            {
+                Console.WriteLine("MYBOT: Searched to depth of: "+ i);
+                break;
+            }
+        }
+        
+    }
     private int Search(Board board, int depth, int alpha, int beta, int plyFromRoot, Timer timer)
     {
-        //looks in transposition table if the position was evaluated before, currently only gives back the value of the position. Todo: Return of Move and NodeType has to be implemented
-        var zobristKey = board.ZobristKey;
-        TranspositionEntry? entry = TranspositionTable[zobristKey % TranspositionTableEntries];
-        if (entry != null && entry.Key == zobristKey && entry.Depth >= depth)
-        {
-            cutoffTT++;
-            return entry.Value;
-        }
-        /*if (entry?.Key != null&& entry.Key == zobristKey && entry.Depth >= depth && ((entry.NodeType ==0)||(entry.NodeType == 1 && entry.Value <= alpha)||(entry.NodeType == 2 && entry.Value >= beta)))
-        {
-            //position has been found and depth is deep enough 
-            // 0 = Exact, 1 = Upper Bound, 2 = Lower Bound
-            cutoffTT++;
-            bestMoveThisIteration = entry.Move;
-            return entry.Value;
-        }*/
-
         if (timer.MillisecondsElapsedThisTurn >= timeLimit)
         {
             return 0;
         }
-        //at he max depth starts evaluating board position, todo: quisence serach - searches till no captures can be made anymore
-        if (depth == 0) return Evaluate(board);
+        //max. depth starts evaluating board position, todo: quisence serach
+        Move[] moves;
         
-        Move[] moves = OrderMoves(board.GetLegalMoves(),board);
-        byte bound = 1; //upper bound
-        
-        if (moves.Length == 0 || board.IsDraw())
+        if (depth == 0)
         {
-            if (board.IsInCheck()) return -infinity;
+            return Evaluate(board);
+            moves = board.GetLegalMoves(true);
+            quiescenceSearch++;
+            if (moves.Length == 0)
+            {
+                return Evaluate(board);
+            }
+        }
+        else
+        {
+            moves = OrderMoves(board.GetLegalMoves(),board);
+            if (moves.Length == 0 || board.IsDraw()) //if there are no legal moves (and the Quiescence Search is not going, the game is over
+            {
+                if (board.IsInCheck()) return -9999999; //neg infinity
 
-            return 0;
+                return 0;
+            }
         }
 
-        //loops trough all legal moves and plays each of them, recursively calls itself to get each response of the enemy, prunes if best move for opposite site has been found
         foreach (var move in moves)
         {
             board.MakeMove(move);
@@ -109,7 +110,6 @@ public class MyBot : IChessBot
             if (evaluation >= beta)
             {
                 cutoffAlphaBeta++;
-                store(zobristKey,beta,move,(byte)depth,2); //lower bound = 2
                 return beta; //SNIPP
             }
             
@@ -117,14 +117,13 @@ public class MyBot : IChessBot
             {
                 bestMoveThisPosition = move;
                 alpha = evaluation;
-                bound = 0; //Exact = 0
                 if (plyFromRoot == 0)
                 {
                     bestMoveThisIteration = move;
                 }
             }
         }
-        store(zobristKey, alpha,bestMoveThisPosition,(byte)depth,bound);
+        //store(board.ZobristKey,new TranspositionEntry {Value = (short)alpha,Depht = (byte)depth, Move = bestMoveThisPosition});
         return alpha;
     }
 
@@ -137,8 +136,12 @@ public class MyBot : IChessBot
             var movePieceType = board.GetPiece(move.TargetSquare).PieceType;
             var capturePieceType = board.GetPiece(move.StartSquare).PieceType;
             int score = 0;
-            
-            //checks if move is a capture, the won material difference and if the piece can be captured from the target sqare
+            if (move.Equals(bestLastMove))
+            {
+                score += infinity;
+                moveValues[i] = score;
+                continue;
+            }
             if (move.IsCapture)
             {
                 var delta = pieceValues[(int)movePieceType] 
@@ -150,7 +153,6 @@ public class MyBot : IChessBot
                 else score += 8000 + delta;
             }
 
-            //checks if piece can be promoted and not be captured
             if (movePieceType == PieceType.Pawn && move.IsPromotion && !move.IsCapture)
             {
                 score += 6000;
@@ -183,7 +185,7 @@ public class MyBot : IChessBot
         var value = 0;
         if (board.IsInCheckmate())
         {
-            return infinity;
+            return infinity*perspective;
         }
         if (board.IsDraw())
         {
@@ -198,7 +200,6 @@ public class MyBot : IChessBot
         return value*perspective;
     }
 
-    
     int getMaterialDifference(Board board)
     {
         var sum = 0;
@@ -212,19 +213,5 @@ public class MyBot : IChessBot
 
         return sum;
     }
-
-    //creates a new entry in the transpostiontable at the index mod TT size
-    void store(ulong key,int value, Move move, byte depth, byte nodeType)
-    {
-        TranspositionTable[key % TranspositionTableEntries] = new TranspositionEntry
-            { Key = key, Value = value, Depth = depth};
-    }
-}
-
-public class TranspositionEntry
-{
-    public ulong Key;
-    public int Value;
-    public byte Depth;
     
 }
