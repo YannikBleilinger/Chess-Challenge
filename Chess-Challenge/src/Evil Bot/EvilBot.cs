@@ -36,7 +36,7 @@ public class EvilBot : IChessBot
         
         //Starte iterative tiefensuche
         var (bestMove, bestEval) = IterativeDeepening(board,timer);
-        Console.WriteLine("EVIL: Evaluated {0} Positions,Reached Depth: {3}, Transposition Cutoffs: {1}, Best value: {2}",evaluatedPositions,transposCutoffs,bestEval,reachedDepth);
+        //Console.WriteLine("EVIL: Evaluated {0} Positions,Reached Depth: {3}, Transposition Cutoffs: {1}, Best value: {2}",evaluatedPositions,transposCutoffs,bestEval,reachedDepth);
         //Console.WriteLine(board.CreateDiagram());
         if (!board.GetLegalMoves().Contains(bestMove))
         {

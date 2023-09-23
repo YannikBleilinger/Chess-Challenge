@@ -15,7 +15,6 @@ public class MyBot : IChessBot
     //settings
     private const int MAX_DEPTH = 7;
     private const int infinity = 99999999;
-    private const int MAX_ENTRIES = 13000000;
     
     //control variables
     private int evaluatedPositions;
@@ -24,17 +23,16 @@ public class MyBot : IChessBot
 
     private int cutoffTT;
     //manditory variables
-    Move bestMoveThisPosition = Move.NullMove;
+    Move bestMoveThisPosition = Move.NullMove; //only used with transposition table
     Move bestMoveThisIteration = Move.NullMove;
     int[] pieceValues = {100,320,330,500,900,20000};
-    private Dictionary<ulong, TranspositionEntry> transpositionTable = new();
     
     public Move Think(Board board, Timer timer)
     {
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
-        
+        Console.WriteLine("EVALUATION: "+ Evaluate(board));
         Search(board, MAX_DEPTH, -infinity, infinity,0);
 
         Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
@@ -44,19 +42,6 @@ public class MyBot : IChessBot
 
     private int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
     {
-        //searches if position has been evaluated before, if so the positions evaluation and move is read from the
-        //transposition table
-        var zobrisKey = board.ZobristKey;
-        if (transpositionTable.ContainsKey(zobrisKey) && transpositionTable[zobrisKey].Depht >= depth)
-        {
-            cutoffTT++;
-            if (plyFromRoot == 0)
-            {
-                bestMoveThisIteration = transpositionTable[zobrisKey].Move;
-            }
-
-            return transpositionTable[zobrisKey].Value;
-        }
         
         //max. depth starts evaluating board position, todo: quisence serach
         if (depth == 0) return Evaluate(board);
@@ -93,7 +78,6 @@ public class MyBot : IChessBot
                 }
             }
         }
-        store(board.ZobristKey,new TranspositionEntry {Value = (short)alpha,Depht = (byte)depth, Move = bestMoveThisPosition});
         return alpha;
     }
 
@@ -115,16 +99,6 @@ public class MyBot : IChessBot
         }
 
         return sum;
-    }
-    
-    void store(ulong key, TranspositionEntry entry)
-    {
-        if (transpositionTable.Count >= MAX_ENTRIES)
-        {
-            transpositionTable.Remove(transpositionTable.Keys.First()); 
-        }
-
-        transpositionTable[key] = entry;
     }
 }
 
