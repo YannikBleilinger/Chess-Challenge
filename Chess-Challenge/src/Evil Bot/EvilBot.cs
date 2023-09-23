@@ -42,7 +42,7 @@ public class EvilBot : IChessBot
 
     private int[] moveValues;
 
-    private TranspositionEntry?[] TranspositionTable;
+    private TranspositionEntryEvil?[] TranspositionTable;
     
     public Move Think(Board board, Timer timer)
     {
@@ -51,7 +51,7 @@ public class EvilBot : IChessBot
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
         moveValues = new int[218];
-        TranspositionTable = new TranspositionEntry[TranspositionTableEntries];
+        TranspositionTable = new TranspositionEntryEvil[TranspositionTableEntries];
         
         Search(board, MAX_DEPTH, -infinity, infinity,0,timer);
         //IterativeDeepening(board,timer);
@@ -66,7 +66,7 @@ public class EvilBot : IChessBot
     {
         //looks in transposition table if the position was evaluated before, currently only gives back the value of the position. Todo: Return of Move and NodeType has to be implemented
         var zobristKey = board.ZobristKey;
-        TranspositionEntry? entry = TranspositionTable[zobristKey % TranspositionTableEntries];
+        TranspositionEntryEvil? entry = TranspositionTable[zobristKey % TranspositionTableEntries];
         if (entry != null && entry.Key == zobristKey && entry.Depth >= depth)
         {
             cutoffTT++;
@@ -216,12 +216,12 @@ public class EvilBot : IChessBot
     //creates a new entry in the transpostiontable at the index mod TT size
     void store(ulong key,int value, Move move, byte depth, byte nodeType)
     {
-        TranspositionTable[key % TranspositionTableEntries] = new TranspositionEntry
+        TranspositionTable[key % TranspositionTableEntries] = new TranspositionEntryEvil
             { Key = key, Value = value, Depth = depth};
     }
 }
 
-public class TranspositionEntry
+public class TranspositionEntryEvil
 {
     public ulong Key;
     public int Value;

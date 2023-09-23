@@ -34,10 +34,17 @@ public class MyBot : IChessBot
     int quiesenceSearched;
     
     //manditory variables
-    Move bestMoveThisPosition = Move.NullMove; //only used with transposition table
     Move bestMoveThisIteration = Move.NullMove;
-    int[] pieceValues = {0,100,320,330,500,900,20000};
+    int[] pieceValues = {0,100,320,330,500,900,20_000};
     int[] moveValues;
+    int round = 0;
+
+    TranspositionTableEntry?[] transpositionTable;
+    private int ENTRY_AMOUNT = 1_000_000;
+
+    const byte EXACT = 0;
+    const byte UPPERBOUND = 1;
+    const byte LOWERBOUND = 2;
     
     public Move Think(Board board, Timer timer)
     {
@@ -46,6 +53,7 @@ public class MyBot : IChessBot
         cutoffTT = 0;
         quiesenceSearched = 0;
         moveValues = new int[218];
+        transpositionTable = new TranspositionTableEntry[ENTRY_AMOUNT];
 
         
         Console.WriteLine("EVALUATION: "+ Evaluate(board));
@@ -53,13 +61,34 @@ public class MyBot : IChessBot
 
         Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}, Quiesence moves: {3}",evaluatedPositions, cutoffAlphaBeta, cutoffTT,quiesenceSearched);
         Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
+
+        round++;
         return bestMoveThisIteration;
     }
 
     int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
     {
-        
-        //max. depth starts evaluating board position, todo: quisence serach
+        int originalAlpha = alpha;
+        //Transposition table allows the skip of similar positions.
+        var zobrisKey = board.ZobristKey;
+        TranspositionTableEntry? entry = transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT];
+        if (entry != null && entry.Key == zobrisKey && entry.Depth <= depth) //todo: since the depth goes down in my algorithm it might be <= or >=
+        {
+            cutoffTT++;
+            byte flag = entry.Flag;
+            if (flag == EXACT) return entry.Value;
+            if (flag == LOWERBOUND)
+            {
+                alpha = Math.Max(alpha, entry.Value);
+            }else if (flag == UPPERBOUND) beta = Math.Min(beta, entry.Value);
+
+        }
+
+        if (alpha >= beta)
+        {
+            return entry.Value;
+        }
+        //max. depth starts evaluating board position
         if (depth == 0) return QuiescenceSearch(alpha,beta,board);
 
         var moves = OrderMoves(board.GetLegalMoves(), board);
@@ -86,7 +115,6 @@ public class MyBot : IChessBot
             
             if(evaluation>alpha)
             {
-                bestMoveThisPosition = move;
                 alpha = evaluation;
                 if (plyFromRoot == 0)
                 {
@@ -94,6 +122,14 @@ public class MyBot : IChessBot
                 }
             }
         }
+        //set the flag
+        byte storeFlag = 0;
+        if (alpha <= originalAlpha) storeFlag = UPPERBOUND;
+        if (alpha >= beta) storeFlag = LOWERBOUND;
+        
+        //store the entry in the table
+        transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT] = new TranspositionTableEntry {Key = zobrisKey, Depth = (byte)depth,Flag = storeFlag,Value = alpha};
+        
         return alpha;
     }
 
@@ -188,10 +224,31 @@ public class MyBot : IChessBot
 
     int Evaluate(Board board)
     {
-        var perspective = board.IsWhiteToMove ? 1 : -1;
-
         evaluatedPositions++;
-        return perspective*GetMaterialDifference(board);
+
+        var perspective = board.IsWhiteToMove ? 1 : -1;
+        var value = 0;
+        
+        if (board.IsInCheckmate())
+        {
+            return infinity;
+        }
+        if (board.IsDraw())
+        {
+            return 0;
+        }
+
+        if (round < 10)
+        {
+            value += board.HasKingsideCastleRight(board.IsWhiteToMove) ||
+                      board.HasQueensideCastleRight(board.IsWhiteToMove)
+                ? 20
+                : 0;
+            
+        }
+        value += board.IsInCheck() ? 20 : 0;
+        value += GetMaterialDifference(board);
+        return perspective * value;
     }
 
     int GetMaterialDifference(Board board)
@@ -209,9 +266,10 @@ public class MyBot : IChessBot
     }
 }
 
-public class TranspositionEntryEvil
+public class TranspositionTableEntry
 {
-    public short Value { get; set; }
-    public byte Depht { get; set; }
-    public Move Move { get; set; }
+    public ulong Key;
+    public int Value;
+    public byte Depth;
+    public byte Flag;
 }
