@@ -6,32 +6,47 @@ using System.Diagnostics;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
-//todo: transpos table
-//todo: iterative deepening
-//todo: king safety and endgame ? 
-//todo: 
+/// <summary>
+/// This chess bot was created as participation in the "Tiny chess bot challenge" by Sebastian Lague. It uses the API of the given Project that already implements all features of chess.
+/// This bot implements the following features (due to the restrictions of tokens in this challenge not all features can be implemented):
+/// For search:
+/// - Alpha-Beta Pruning
+/// - Todo: Move Ordering - after capture values, promotion
+/// - Todo: Transposition Tables
+/// - Todo: Quiescence Search
+/// - Todo: Iterative deepening
+/// For evaluation:
+/// - Material difference
+/// - Todo: Checkmate, Check or Draw
+/// - Todo: King safety
+/// - Todo: King for endgame
+/// </summary>
 public class MyBot : IChessBot
 {
     //settings
-    private const int MAX_DEPTH = 7;
-    private const int infinity = 99999999;
+    const int MAX_DEPTH = 7;
+    const int infinity = 99999999;
     
     //control variables
-    private int evaluatedPositions;
+    int evaluatedPositions;
 
-    private int cutoffAlphaBeta;
+    int cutoffAlphaBeta;
 
-    private int cutoffTT;
+    int cutoffTT;
     //manditory variables
     Move bestMoveThisPosition = Move.NullMove; //only used with transposition table
     Move bestMoveThisIteration = Move.NullMove;
-    int[] pieceValues = {100,320,330,500,900,20000};
+    int[] pieceValues = {0,100,320,330,500,900,20000};
+    int[] moveValues;
     
     public Move Think(Board board, Timer timer)
     {
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
+        moveValues = new int[218];
+
+        
         Console.WriteLine("EVALUATION: "+ Evaluate(board));
         Search(board, MAX_DEPTH, -infinity, infinity,0);
 
@@ -40,13 +55,13 @@ public class MyBot : IChessBot
         return bestMoveThisIteration;
     }
 
-    private int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
+    int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
     {
         
         //max. depth starts evaluating board position, todo: quisence serach
         if (depth == 0) return Evaluate(board);
         
-        Move[] moves = board.GetLegalMoves();
+        Move[] moves = OrderMoves(board.GetLegalMoves(),board);
         
         if (moves.Length == 0 || board.IsDraw())
         {
@@ -81,13 +96,71 @@ public class MyBot : IChessBot
         return alpha;
     }
 
-    int Evaluate(Board board)
+    /// <summary>
+    /// Sorts the moves depending on how good they are, which makes alpha beta pruning a lot more efficient.
+    /// This also has effects on how the bot plays. Eg. checkmate although it does not get evaluated that this is good.
+    /// Downside: Consumes a lot of brain capacity. Todo: Move ordering with less tokens
+    /// </summary>
+    /// <param name="moves"></param>
+    /// <param name="board"></param>
+    /// <returns></returns>
+    Move[] OrderMoves(Move[] moves, Board board)
     {
-        evaluatedPositions++;
-        return getMaterialDifference(board);
+        for (int i = 0; i < moves.Length; i++)
+        {
+            
+            var move = moves[i];
+            var movePieceType = board.GetPiece(move.TargetSquare).PieceType;
+            var capturePieceType = board.GetPiece(move.StartSquare).PieceType;
+            int score = 0;
+            
+            //checks if move is a capture, the won material difference and if the piece can be captured from the target square
+            if (move.IsCapture && !capturePieceType.Equals(PieceType.King))
+            {
+                var delta = pieceValues[(int)movePieceType] 
+                            - pieceValues[(int)capturePieceType];
+                if (board.SquareIsAttackedByOpponent(move.TargetSquare))
+                {
+                    score += (delta >= 0 ? 8000 : 2000) + delta;
+                }
+                else score += 8000 + delta;
+            }
+
+            //checks if piece can be promoted and not be captured
+            if (movePieceType == PieceType.Pawn && move.IsPromotion && !move.IsCapture)
+            {
+                score += 6000;
+            }
+
+            moveValues[i] = score;
+        }
+        
+        //sort the array
+        for (int i = 0; i < moves.Length - 1; i++)
+        {
+            for (int j = i + 1; j > 0; j--)
+            {
+                int swapIndex = j - 1;
+                if (moveValues[swapIndex] < moveValues[j])
+                {
+                    (moves[j], moves[swapIndex]) = (moves[swapIndex], moves[j]);
+                    (moveValues[j], moveValues[swapIndex]) = (moveValues[swapIndex], moveValues[j]);
+                }
+            }
+        }
+
+        return moves;
     }
 
-    int getMaterialDifference(Board board)
+    int Evaluate(Board board)
+    {
+        var perspective = board.IsWhiteToMove ? 1 : -1;
+
+        evaluatedPositions++;
+        return perspective*GetMaterialDifference(board);
+    }
+
+    int GetMaterialDifference(Board board)
     {
         var sum = 0;
         PieceList[] pieceLists = board.GetAllPieceLists();
@@ -102,7 +175,7 @@ public class MyBot : IChessBot
     }
 }
 
-public class TranspositionEntry
+public class TranspositionEntryEvil
 {
     public short Value { get; set; }
     public byte Depht { get; set; }
