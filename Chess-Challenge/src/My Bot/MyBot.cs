@@ -29,10 +29,10 @@ public class MyBot : IChessBot
     
     //control variables
     int evaluatedPositions;
-
     int cutoffAlphaBeta;
-
     int cutoffTT;
+    int quiesenceSearched;
+    
     //manditory variables
     Move bestMoveThisPosition = Move.NullMove; //only used with transposition table
     Move bestMoveThisIteration = Move.NullMove;
@@ -44,13 +44,14 @@ public class MyBot : IChessBot
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
+        quiesenceSearched = 0;
         moveValues = new int[218];
 
         
         Console.WriteLine("EVALUATION: "+ Evaluate(board));
         Search(board, MAX_DEPTH, -infinity, infinity,0);
 
-        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
+        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}, Quiesence moves: {3}",evaluatedPositions, cutoffAlphaBeta, cutoffTT,quiesenceSearched);
         Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
         return bestMoveThisIteration;
     }
@@ -59,9 +60,9 @@ public class MyBot : IChessBot
     {
         
         //max. depth starts evaluating board position, todo: quisence serach
-        if (depth == 0) return Evaluate(board);
-        
-        Move[] moves = OrderMoves(board.GetLegalMoves(),board);
+        if (depth == 0) return QuiescenceSearch(alpha,beta,board);
+
+        var moves = OrderMoves(board.GetLegalMoves(), board);
         
         if (moves.Length == 0 || board.IsDraw())
         {
@@ -96,14 +97,47 @@ public class MyBot : IChessBot
         return alpha;
     }
 
-    /// <summary>
+    // Searches until the position is "quiet" (no more captures can be made)
+    // In this format it uses a lot of tokens, could be integrated in the Search function.
+    int QuiescenceSearch(int alpha, int beta, Board board)
+    {
+        quiesenceSearched++;
+        int eval = Evaluate(board);
+        
+        if (eval >= beta)
+        {
+            cutoffAlphaBeta++;
+            return beta;
+        }
+        if (eval > alpha)
+        {
+            alpha = eval;
+        }
+
+        var moves = board.GetLegalMoves(true);
+        foreach (var move in moves)
+        {
+            board.MakeMove(move);
+            eval = -QuiescenceSearch(-beta, -alpha, board);
+            board.UndoMove(move);
+            
+            if (eval >= beta)
+            {
+                cutoffAlphaBeta++;
+                return beta;
+            }
+            if (eval > alpha)
+            {
+                alpha = eval;
+            }
+        }
+
+        return alpha;
+    }
+
     /// Sorts the moves depending on how good they are, which makes alpha beta pruning a lot more efficient.
     /// This also has effects on how the bot plays. Eg. checkmate although it does not get evaluated that this is good.
     /// Downside: Consumes a lot of brain capacity. Todo: Move ordering with less tokens
-    /// </summary>
-    /// <param name="moves"></param>
-    /// <param name="board"></param>
-    /// <returns></returns>
     Move[] OrderMoves(Move[] moves, Board board)
     {
         for (int i = 0; i < moves.Length; i++)
