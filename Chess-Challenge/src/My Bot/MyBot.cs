@@ -24,28 +24,32 @@ using Microsoft.CodeAnalysis;
 public class MyBot : IChessBot
 {
     //settings
-    const int MAX_DEPTH = 7;
+    const int MAX_DEPTH = 20;
     const int infinity = 99999999;
+    int TIME_LIMIT = 2000;
     
     //control variables
     int evaluatedPositions;
     int cutoffAlphaBeta;
     int cutoffTT;
     int quiesenceSearched;
+    private int avgEvaluated;
     
     //manditory variables
-    Move bestMoveThisIteration = Move.NullMove;
+    Move bestMoveThisIteration;
+    Move bestMoveSoFar;
     int[] pieceValues = {0,100,320,330,500,900,20_000};
     int[] moveValues;
-    int round = 0;
+    int round=1;
 
-    TranspositionTableEntry?[] transpositionTable;
+    
     private int ENTRY_AMOUNT = 1_000_000;
+    TranspositionTableEntry?[] transpositionTable = new TranspositionTableEntry[1_000_000];
 
     const byte EXACT = 0;
     const byte UPPERBOUND = 1;
     const byte LOWERBOUND = 2;
-    
+
     public Move Think(Board board, Timer timer)
     {
         evaluatedPositions = 0;
@@ -53,26 +57,49 @@ public class MyBot : IChessBot
         cutoffTT = 0;
         quiesenceSearched = 0;
         moveValues = new int[218];
-        transpositionTable = new TranspositionTableEntry[ENTRY_AMOUNT];
 
         
-        Console.WriteLine("EVALUATION: "+ Evaluate(board));
-        Search(board, MAX_DEPTH, -infinity, infinity,0);
-
-        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}, Quiesence moves: {3}",evaluatedPositions, cutoffAlphaBeta, cutoffTT,quiesenceSearched);
-        Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
+        IterativeDeepening(board,timer);
+        avgEvaluated += evaluatedPositions;
+        Console.WriteLine("MYBOT:Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
+        Console.WriteLine("Transpos lenght: "+transpositionTable.Count(s => s != null));
 
         round++;
-        return bestMoveThisIteration;
+        return bestMoveSoFar;
     }
 
-    int Search(Board board, int depth, int alpha, int beta, int plyFromRoot)
+    void IterativeDeepening(Board board, Timer timer)
     {
+        for (int i = 1; i <= MAX_DEPTH; i++)
+        {
+            Search(board, i, -infinity, infinity, 0, timer);
+            
+            bestMoveSoFar = bestMoveThisIteration;
+            bestMoveThisIteration = Move.NullMove;
+
+            if (timer.MillisecondsElapsedThisTurn >= TIME_LIMIT)
+            {
+                Console.WriteLine("MYBOT: Searched to depth of: "+ i);
+                break;
+            }
+        }
+        
+    }
+
+    int Search(Board board, int depth, int alpha, int beta, int plyFromRoot, Timer timer)
+    {
+        if (timer.MillisecondsElapsedThisTurn >= TIME_LIMIT)
+        {
+            return 0;
+        }
+
+        if (depth == 0) return QuiescenceSearch(alpha, beta, board);
+        
         int originalAlpha = alpha;
         //Transposition table allows the skip of similar positions.
         var zobrisKey = board.ZobristKey;
         TranspositionTableEntry? entry = transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT];
-        if (entry != null && entry.Key == zobrisKey && entry.Depth <= depth) //todo: since the depth goes down in my algorithm it might be <= or >=
+        if (entry != null && entry.Key == zobrisKey && entry.Depth >= depth) //todo: since the depth goes down in my algorithm it might be <= or >=
         {
             cutoffTT++;
             byte flag = entry.Flag;
@@ -91,7 +118,10 @@ public class MyBot : IChessBot
         //max. depth starts evaluating board position
         if (depth == 0) return QuiescenceSearch(alpha,beta,board);
 
-        var moves = OrderMoves(board.GetLegalMoves(), board);
+        Span<Move> moves = stackalloc Move[256];
+        board.GetLegalMovesNonAlloc(ref moves);
+        
+        moves = OrderMoves(board.GetLegalMoves(), board);
         
         if (moves.Length == 0 || board.IsDraw())
         {
@@ -103,7 +133,7 @@ public class MyBot : IChessBot
         foreach (var move in moves)
         {
             board.MakeMove(move);
-            var evaluation = -Search(board,depth - 1, -beta, -alpha,plyFromRoot+1);
+            var evaluation = -Search(board,depth - 1, -beta, -alpha,plyFromRoot+1,timer);
             board.UndoMove(move);
             
             //move is to good for the opposite side and gets pruned
@@ -174,7 +204,7 @@ public class MyBot : IChessBot
     /// Sorts the moves depending on how good they are, which makes alpha beta pruning a lot more efficient.
     /// This also has effects on how the bot plays. Eg. checkmate although it does not get evaluated that this is good.
     /// Downside: Consumes a lot of brain capacity. Todo: Move ordering with less tokens
-    Move[] OrderMoves(Move[] moves, Board board)
+    Span<Move> OrderMoves(Span<Move> moves, Board board)
     {
         for (int i = 0; i < moves.Length; i++)
         {
@@ -183,6 +213,19 @@ public class MyBot : IChessBot
             var movePieceType = board.GetPiece(move.TargetSquare).PieceType;
             var capturePieceType = board.GetPiece(move.StartSquare).PieceType;
             int score = 0;
+
+            if (move.Equals(bestMoveSoFar))
+            {
+                score += infinity;
+            }
+            
+            //TEST: das hier lässt bauern opfern ? wieso das denn wtf
+            if (move.IsCastles) score += 100;
+            if (board.PlyCount < 15 && move.MovePieceType.Equals(PieceType.Pawn)&&move.StartSquare.File.Equals(5))
+            {
+                score += 10;
+            }
+            
             
             //checks if move is a capture, the won material difference and if the piece can be captured from the target square
             if (move.IsCapture && !capturePieceType.Equals(PieceType.King))
@@ -222,7 +265,7 @@ public class MyBot : IChessBot
         return moves;
     }
 
-    int Evaluate(Board board)
+    int EvaluatePre(Board board)
     {
         evaluatedPositions++;
 
@@ -237,7 +280,7 @@ public class MyBot : IChessBot
         {
             return 0;
         }
-
+        /*
         if (round < 10)
         {
             value += board.HasKingsideCastleRight(board.IsWhiteToMove) ||
@@ -246,9 +289,13 @@ public class MyBot : IChessBot
                 : 0;
             
         }
-        value += board.IsInCheck() ? 20 : 0;
-        value += GetMaterialDifference(board);
-        return perspective * value;
+        value += board.IsInCheck() ? 20 : 0;*/
+        Span<Move> evalMoves = stackalloc Move[256];
+        board.GetLegalMovesNonAlloc(ref evalMoves);
+        
+        value += evalMoves.Length*2;
+        
+        return (perspective * value) +GetMaterialDifference(board);;
     }
 
     int GetMaterialDifference(Board board)
@@ -263,6 +310,30 @@ public class MyBot : IChessBot
         }
 
         return sum;
+    }
+
+    int Evaluate(Board board)
+    {
+        evaluatedPositions++;
+        var perspective = board.IsWhiteToMove ? 1 : -1;
+
+        int value = 0;
+        
+        if (board.IsInCheckmate())
+        {
+            return infinity;
+        }
+        if (board.IsDraw())
+        {
+            return 0;
+        }
+
+        if (board.IsInCheck())
+        {
+            value += 100;
+        }
+        //bei Material Difference kommt welche hin!
+        return perspective*(GetMaterialDifference(board));
     }
 }
 
