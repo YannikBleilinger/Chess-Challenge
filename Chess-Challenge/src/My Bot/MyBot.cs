@@ -132,6 +132,7 @@ public class MyBot : IChessBot
             if (evaluation >= beta)
             {
                 cutoffAlphaBeta++;
+                transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT] = new TranspositionTableEntry {Key = zobrisKey, Depth = (byte)depth,Flag = LOWERBOUND,Value = alpha};
                 return beta; //SNIPP
             }
             

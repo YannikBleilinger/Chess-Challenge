@@ -34,15 +34,19 @@ public class EvilBot : IChessBot
     Move bestMoveThisIteration = Move.NullMove;
     private Move lastBestMove = Move.NullMove;
     int[] pieceValues = {0,100,320,330,500,900,20000};
+    
+    const byte EXACT = 0;
+    const byte UPPERBOUND = 1;
+    const byte LOWERBOUND = 2;
 
     private int[] moveValues;
 
-    private TranspositionEntry?[] TranspositionTable;
+    private TranspositionTableEntry?[] TranspositionTable;
     
     public Move Think(Board board, Timer timer)
     {
         moveValues = new int[218];
-        TranspositionTable = new TranspositionEntry[TranspositionTableEntries];
+        TranspositionTable = new TranspositionTableEntry[TranspositionTableEntries];
         
         Search(board, MAX_DEPTH, -infinity, infinity,0,timer);
         
@@ -53,19 +57,18 @@ public class EvilBot : IChessBot
     {
         //looks in transposition table if the position was evaluated before, currently only gives back the value of the position. Todo: Return of Move and NodeType has to be implemented
         var zobristKey = board.ZobristKey;
-        TranspositionEntry? entry = TranspositionTable[zobristKey % TranspositionTableEntries];
+        var originalAlpha = alpha;
+        TranspositionTableEntry? entry = TranspositionTable[zobristKey % (ulong)TranspositionTableEntries];
         if (entry != null && entry.Key == zobristKey && entry.Depth >= depth)
         {
-            return entry.Value;
+            byte flag = entry.Flag;
+            if (flag == EXACT) return entry.Value;
+            if (flag == LOWERBOUND)
+            {
+                alpha = Math.Max(alpha, entry.Value);
+            }else if (flag == UPPERBOUND) beta = Math.Min(beta, entry.Value);
+
         }
-        /*if (entry?.Key != null&& entry.Key == zobristKey && entry.Depth >= depth && ((entry.NodeType ==0)||(entry.NodeType == 1 && entry.Value <= alpha)||(entry.NodeType == 2 && entry.Value >= beta)))
-        {
-            //position has been found and depth is deep enough 
-            // 0 = Exact, 1 = Upper Bound, 2 = Lower Bound
-            cutoffTT++;
-            bestMoveThisIteration = entry.Move;
-            return entry.Value;
-        }*/
 
         if (timer.MillisecondsElapsedThisTurn >= timeLimit)
         {
@@ -94,7 +97,6 @@ public class EvilBot : IChessBot
             //move is to good for the opposite side and gets pruned
             if (evaluation >= beta)
             {
-                store(zobristKey,beta,move,(byte)depth,2); //lower bound = 2
                 return beta; //SNIPP
             }
             
@@ -109,7 +111,13 @@ public class EvilBot : IChessBot
                 }
             }
         }
-        store(zobristKey, alpha,bestMoveThisPosition,(byte)depth,bound);
+        
+        byte storeFlag = 0;
+        if (alpha <= originalAlpha) storeFlag = UPPERBOUND;
+        if (alpha >= beta) storeFlag = LOWERBOUND;
+
+        TranspositionTable[zobristKey % (ulong)TranspositionTableEntries] = new TranspositionTableEntry {Key = zobristKey, Depth = (byte)depth,Flag = storeFlag,Value = alpha};
+
         return alpha;
     }
 
@@ -197,10 +205,4 @@ public class EvilBot : IChessBot
         return sum;
     }
 
-    //creates a new entry in the transpostiontable at the index mod TT size
-    void store(ulong key,int value, Move move, byte depth, byte nodeType)
-    {
-        TranspositionTable[key % TranspositionTableEntries] = new TranspositionEntry
-            { Key = key, Value = value, Depth = depth};
-    }
 }
