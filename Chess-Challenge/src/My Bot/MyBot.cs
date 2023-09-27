@@ -1,10 +1,7 @@
 ﻿using ChessChallenge.API;
 using System;
 using System.Numerics;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using Microsoft.CodeAnalysis;
 
 /// <summary>
 /// This chess bot was created as participation in the "Tiny chess bot challenge" by Sebastian Lague. It uses the API of the given Project that already implements all features of chess.
@@ -26,25 +23,22 @@ public class MyBot : IChessBot
     //settings
     const int MAX_DEPTH = 20;
     const int infinity = 99999999;
-    int TIME_LIMIT = 2000;
+    int TIME_LIMIT = 100;
     
     //control variables
     int evaluatedPositions;
     int cutoffAlphaBeta;
     int cutoffTT;
-    int quiesenceSearched;
-    private int avgEvaluated;
-    
+
     //manditory variables
     Move bestMoveThisIteration;
     Move bestMoveSoFar;
     int[] pieceValues = {0,100,320,330,500,900,20_000};
     int[] moveValues;
-    int round=1;
 
     
-    private int ENTRY_AMOUNT = 1_000_000;
-    TranspositionTableEntry?[] transpositionTable = new TranspositionTableEntry[1_000_000];
+    private int ENTRY_AMOUNT = 10_000;
+    private TranspositionTableEntry?[] transpositionTable;
 
     const byte EXACT = 0;
     const byte UPPERBOUND = 1;
@@ -55,16 +49,14 @@ public class MyBot : IChessBot
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
-        quiesenceSearched = 0;
         moveValues = new int[218];
+        transpositionTable = new TranspositionTableEntry[ENTRY_AMOUNT];
 
         
         IterativeDeepening(board,timer);
-        avgEvaluated += evaluatedPositions;
         Console.WriteLine("MYBOT:Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
         Console.WriteLine("Transpos lenght: "+transpositionTable.Count(s => s != null));
 
-        round++;
         return bestMoveSoFar;
     }
 
@@ -99,7 +91,7 @@ public class MyBot : IChessBot
         //Transposition table allows the skip of similar positions.
         var zobrisKey = board.ZobristKey;
         TranspositionTableEntry? entry = transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT];
-        if (entry != null && entry.Key == zobrisKey && entry.Depth >= depth) //todo: since the depth goes down in my algorithm it might be <= or >=
+        if (entry != null && entry.Key == zobrisKey && entry.Depth >= depth)
         {
             cutoffTT++;
             byte flag = entry.Flag;
@@ -167,7 +159,6 @@ public class MyBot : IChessBot
     // In this format it uses a lot of tokens, could be integrated in the Search function.
     int QuiescenceSearch(int alpha, int beta, Board board)
     {
-        quiesenceSearched++;
         int eval = Evaluate(board);
         
         if (eval >= beta)
@@ -219,13 +210,8 @@ public class MyBot : IChessBot
                 score += infinity;
             }
             
-            //TEST: das hier lässt bauern opfern ? wieso das denn wtf
-            if (move.IsCastles) score += 100;
-            if (board.PlyCount < 15 && move.MovePieceType.Equals(PieceType.Pawn)&&move.StartSquare.File.Equals(5))
-            {
-                score += 10;
-            }
-            
+            if (move.IsCastles) score += 50;
+            if (move.MovePieceType == PieceType.King && board.PlyCount < 15) score += -50;
             
             //checks if move is a capture, the won material difference and if the piece can be captured from the target square
             if (move.IsCapture && !capturePieceType.Equals(PieceType.King))
@@ -265,59 +251,16 @@ public class MyBot : IChessBot
         return moves;
     }
 
-    int EvaluatePre(Board board)
-    {
-        evaluatedPositions++;
-
-        var perspective = board.IsWhiteToMove ? 1 : -1;
-        var value = 0;
-        
-        if (board.IsInCheckmate())
-        {
-            return infinity;
-        }
-        if (board.IsDraw())
-        {
-            return 0;
-        }
-        /*
-        if (round < 10)
-        {
-            value += board.HasKingsideCastleRight(board.IsWhiteToMove) ||
-                      board.HasQueensideCastleRight(board.IsWhiteToMove)
-                ? 20
-                : 0;
-            
-        }
-        value += board.IsInCheck() ? 20 : 0;*/
-        Span<Move> evalMoves = stackalloc Move[256];
-        board.GetLegalMovesNonAlloc(ref evalMoves);
-        
-        value += evalMoves.Length*2;
-        
-        return (perspective * value) +GetMaterialDifference(board);;
-    }
-
-    int GetMaterialDifference(Board board)
-    {
-        var sum = 0;
-        PieceList[] pieceLists = board.GetAllPieceLists();
-        for (int i = 0; i < pieceLists.Length-1; i++)
-        {
-            if (i == 5) continue;
-            
-            sum += (i < 6) ? pieceLists[i].Count * pieceValues[i] : -pieceLists[i].Count * pieceValues[i-6];
-        }
-
-        return sum;
-    }
-
     int Evaluate(Board board)
     {
         evaluatedPositions++;
+        
+        
         var perspective = board.IsWhiteToMove ? 1 : -1;
-
-        int value = 0;
+        int whiteValue = 0, blackValue = 0,value = 0;
+        Piece blackKing = new(), whiteKing = new();
+        var ply = board.PlyCount;
+        var isEngame = ply > 30;
         
         if (board.IsInCheckmate())
         {
@@ -327,13 +270,81 @@ public class MyBot : IChessBot
         {
             return 0;
         }
-
-        if (board.IsInCheck())
+        PieceList[] pieceLists = board.GetAllPieceLists();
+        
+        for (int i = 0; i < pieceLists.Length; i++)
         {
-            value += 100;
+            foreach (var piece in pieceLists[i])
+            {
+                switch (i)
+                {
+                    case 0:
+                        //white pawn
+                        whiteValue += 100;
+                        //pawns should promote in endgame
+                        whiteValue += isEngame ? piece.Square.Rank * 2 : 0;
+                        break;
+                    case 1:
+                        //white knight
+                        whiteValue += 320;
+                        whiteValue += piece.Square.Rank == 0 ? -20 :0;
+                        break;
+                    case 2:
+                        //white bishop
+                        whiteValue += 330;
+                        whiteValue += piece.Square.Rank == 0 ? -20 :0;
+                        break;
+                    case 3:
+                        //white rook
+                        whiteValue += 500;
+                        break;
+                    case 4:
+                        //white queen
+                        whiteValue += 1100;
+                        break;
+                    case 5:
+                        //white king
+                        whiteKing = piece;
+                        whiteValue += ply < 10 && piece.Square.Equals(new Square("e1"))? 50:0;
+                        break;
+                    case 6:
+                        //black pawn
+                        blackValue += 100;
+                        blackValue += isEngame ? (7 - piece.Square.Rank) * 2 : 0;
+                        break;
+                    case 7:
+                        //black knight
+                        blackValue += 320;
+                        blackValue += piece.Square.Rank == 7 ? -20 :0;
+                        break;
+                    case 8:
+                        //black bishop
+                        blackValue += 330;
+                        blackValue += piece.Square.Rank == 7 ? -20 :0;
+                        break;
+                    case 9:
+                        //black rook
+                        blackValue += 500;
+                        break;
+                    case 10:
+                        //black queen
+                        blackValue += 1100;
+                        break;
+                    case 11:
+                        //black King
+                        blackKing = piece;
+                        blackValue += ply < 10 && piece.Square.Equals(new Square("e8"))? 50:0;
+
+                        break;
+                }
+            }
         }
-        //bei Material Difference kommt welche hin!
-        return perspective*(GetMaterialDifference(board));
+        //in the engame the kings should move towards each other to 
+        var distance = Math.Abs(whiteKing.Square.File - blackKing.Square.File) +
+                       Math.Abs(whiteKing.Square.Rank - blackKing.Square.Rank);
+        
+        value += isEngame ? 14 - distance*5:0;
+        return perspective * (whiteValue - blackValue) + value;
     }
 }
 
