@@ -1,104 +1,127 @@
 ﻿using ChessChallenge.API;
 using System;
-using System.Collections.Generic;
+using System.Numerics;
 using System.Linq;
-
-//todo: iterative deepening
-//todo: king safety and endgame ?
 
 /// <summary>
 /// This chess bot was created as participation in the "Tiny chess bot challenge" by Sebastian Lague. It uses the API of the given Project that already implements all features of chess.
 /// This bot implements the following features (due to the restrictions of tokens in this challenge not all features can be implemented):
 /// For search:
 /// - Alpha-Beta Pruning
-/// - Move Ordering - after capture values, promotion
-/// - Transposition Tables
+/// - Todo: Move Ordering - after capture values, promotion
+/// - Todo: Transposition Tables
 /// - Todo: Quiescence Search
 /// - Todo: Iterative deepening
 /// For evaluation:
 /// - Material difference
-/// - Checkmate, Check or Draw
+/// - Todo: Checkmate, Check or Draw
 /// - Todo: King safety
 /// - Todo: King for endgame
 /// </summary>
 public class MyBot : IChessBot
 {
     //settings
-    private const int MAX_DEPTH = 5;
-    private const int infinity = 99999999;
-    private const int timeLimit = 999999;
-    private const int TranspositionTableEntries = 100000;
+    const int MAX_DEPTH = 20;
+    const int infinity = 99999999;
+    int TIME_LIMIT = 100;
     
     //control variables
-    private int evaluatedPositions;
-    private int cutoffAlphaBeta;
-    private int cutoffTT;
-    
+    int evaluatedPositions;
+    int cutoffAlphaBeta;
+    int cutoffTT;
+
     //manditory variables
-    Move bestMoveThisPosition = Move.NullMove;
-    Move bestMoveThisIteration = Move.NullMove;
-    private Move lastBestMove = Move.NullMove;
-    int[] pieceValues = {0,100,320,330,500,900,20000};
+    Move bestMoveThisIteration;
+    Move bestMoveSoFar;
+    int[] pieceValues = {0,100,320,330,500,900,20_000};
+    int[] moveValues;
 
-    private int[] moveValues;
-
-    private TranspositionEntry?[] TranspositionTable;
     
+    private int ENTRY_AMOUNT = 10_000;
+    private TranspositionTableEntry?[] transpositionTable;
+
+    const byte EXACT = 0;
+    const byte UPPERBOUND = 1;
+    const byte LOWERBOUND = 2;
+
     public Move Think(Board board, Timer timer)
     {
-        
         evaluatedPositions = 0;
         cutoffAlphaBeta = 0;
         cutoffTT = 0;
         moveValues = new int[218];
-        TranspositionTable = new TranspositionEntry[TranspositionTableEntries];
+        transpositionTable = new TranspositionTableEntry[ENTRY_AMOUNT];
+
         
-        Search(board, MAX_DEPTH, -infinity, infinity,0,timer);
-        //IterativeDeepening(board,timer);
+        IterativeDeepening(board,timer);
+        Console.WriteLine("MYBOT:Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
+        Console.WriteLine("Transpos lenght: "+transpositionTable.Count(s => s != null));
 
-        Console.WriteLine("MYBOT: Evaluated: {0}, Beta-Cuttoffs: {1}, TT-Cutoffs: {2}",evaluatedPositions, cutoffAlphaBeta, cutoffTT);
-        Console.WriteLine("MYBOT: Best move is: " + bestMoveThisIteration);
-        //Console.WriteLine("Time took: "+ timer.MillisecondsElapsedThisTurn);
-        return bestMoveThisIteration;
+        return bestMoveSoFar;
     }
-    
-    private int Search(Board board, int depth, int alpha, int beta, int plyFromRoot, Timer timer)
-    {
-        //looks in transposition table if the position was evaluated before, currently only gives back the value of the position. Todo: Return of Move and NodeType has to be implemented
-        var zobristKey = board.ZobristKey;
-        TranspositionEntry? entry = TranspositionTable[zobristKey % TranspositionTableEntries];
-        if (entry != null && entry.Key == zobristKey && entry.Depth >= depth)
-        {
-            cutoffTT++;
-            return entry.Value;
-        }
-        /*if (entry?.Key != null&& entry.Key == zobristKey && entry.Depth >= depth && ((entry.NodeType ==0)||(entry.NodeType == 1 && entry.Value <= alpha)||(entry.NodeType == 2 && entry.Value >= beta)))
-        {
-            //position has been found and depth is deep enough 
-            // 0 = Exact, 1 = Upper Bound, 2 = Lower Bound
-            cutoffTT++;
-            bestMoveThisIteration = entry.Move;
-            return entry.Value;
-        }*/
 
-        if (timer.MillisecondsElapsedThisTurn >= timeLimit)
+    void IterativeDeepening(Board board, Timer timer)
+    {
+        for (int i = 1; i <= MAX_DEPTH; i++)
+        {
+            Search(board, i, -infinity, infinity, 0, timer);
+            
+            bestMoveSoFar = bestMoveThisIteration;
+            bestMoveThisIteration = Move.NullMove;
+
+            if (timer.MillisecondsElapsedThisTurn >= TIME_LIMIT)
+            {
+                Console.WriteLine("MYBOT: Searched to depth of: "+ i);
+                break;
+            }
+        }
+        
+    }
+
+    int Search(Board board, int depth, int alpha, int beta, int plyFromRoot, Timer timer)
+    {
+        if (timer.MillisecondsElapsedThisTurn >= TIME_LIMIT)
         {
             return 0;
         }
-        //at he max depth starts evaluating board position, todo: quisence serach - searches till no captures can be made anymore
-        if (depth == 0) return Evaluate(board);
+
+        if (depth == 0) return QuiescenceSearch(alpha, beta, board);
         
-        Move[] moves = OrderMoves(board.GetLegalMoves(),board);
-        byte bound = 1; //upper bound
+        int originalAlpha = alpha;
+        //Transposition table allows the skip of similar positions.
+        var zobrisKey = board.ZobristKey;
+        TranspositionTableEntry? entry = transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT];
+        if (entry != null && entry.Key == zobrisKey && entry.Depth >= depth)
+        {
+            cutoffTT++;
+            byte flag = entry.Flag;
+            if (flag == EXACT) return entry.Value;
+            if (flag == LOWERBOUND)
+            {
+                alpha = Math.Max(alpha, entry.Value);
+            }else if (flag == UPPERBOUND) beta = Math.Min(beta, entry.Value);
+
+        }
+
+        if (alpha >= beta)
+        {
+            return entry.Value;
+        }
+        //max. depth starts evaluating board position
+        if (depth == 0) return QuiescenceSearch(alpha,beta,board);
+
+        Span<Move> moves = stackalloc Move[256];
+        board.GetLegalMovesNonAlloc(ref moves);
+        
+        moves = OrderMoves(board.GetLegalMoves(), board);
         
         if (moves.Length == 0 || board.IsDraw())
         {
-            if (board.IsInCheck()) return -infinity;
+            if (board.IsInCheck()) return -9999999; //neg infinity
 
             return 0;
         }
 
-        //loops trough all legal moves and plays each of them, recursively calls itself to get each response of the enemy, prunes if best move for opposite site has been found
         foreach (var move in moves)
         {
             board.MakeMove(move);
@@ -109,26 +132,70 @@ public class MyBot : IChessBot
             if (evaluation >= beta)
             {
                 cutoffAlphaBeta++;
-                store(zobristKey,beta,move,(byte)depth,2); //lower bound = 2
                 return beta; //SNIPP
             }
             
             if(evaluation>alpha)
             {
-                bestMoveThisPosition = move;
                 alpha = evaluation;
-                bound = 0; //Exact = 0
                 if (plyFromRoot == 0)
                 {
                     bestMoveThisIteration = move;
                 }
             }
         }
-        store(zobristKey, alpha,bestMoveThisPosition,(byte)depth,bound);
+        //set the flag
+        byte storeFlag = 0;
+        if (alpha <= originalAlpha) storeFlag = UPPERBOUND;
+        if (alpha >= beta) storeFlag = LOWERBOUND;
+        
+        //store the entry in the table
+        transpositionTable[zobrisKey % (ulong)ENTRY_AMOUNT] = new TranspositionTableEntry {Key = zobrisKey, Depth = (byte)depth,Flag = storeFlag,Value = alpha};
+        
         return alpha;
     }
 
-    private Move[] OrderMoves(Move[] moves, Board board)
+    // Searches until the position is "quiet" (no more captures can be made)
+    // In this format it uses a lot of tokens, could be integrated in the Search function.
+    int QuiescenceSearch(int alpha, int beta, Board board)
+    {
+        int eval = Evaluate(board);
+        
+        if (eval >= beta)
+        {
+            cutoffAlphaBeta++;
+            return beta;
+        }
+        if (eval > alpha)
+        {
+            alpha = eval;
+        }
+
+        var moves = board.GetLegalMoves(true);
+        foreach (var move in moves)
+        {
+            board.MakeMove(move);
+            eval = -QuiescenceSearch(-beta, -alpha, board);
+            board.UndoMove(move);
+            
+            if (eval >= beta)
+            {
+                cutoffAlphaBeta++;
+                return beta;
+            }
+            if (eval > alpha)
+            {
+                alpha = eval;
+            }
+        }
+
+        return alpha;
+    }
+
+    /// Sorts the moves depending on how good they are, which makes alpha beta pruning a lot more efficient.
+    /// This also has effects on how the bot plays. Eg. checkmate although it does not get evaluated that this is good.
+    /// Downside: Consumes a lot of brain capacity. Todo: Move ordering with less tokens
+    Span<Move> OrderMoves(Span<Move> moves, Board board)
     {
         for (int i = 0; i < moves.Length; i++)
         {
@@ -137,12 +204,20 @@ public class MyBot : IChessBot
             var movePieceType = board.GetPiece(move.TargetSquare).PieceType;
             var capturePieceType = board.GetPiece(move.StartSquare).PieceType;
             int score = 0;
+
+            if (move.Equals(bestMoveSoFar))
+            {
+                score += infinity;
+            }
             
-            //checks if move is a capture, the won material difference and if the piece can be captured from the target sqare
-            if (move.IsCapture)
+            if (move.IsCastles) score += 50;
+            if (move.MovePieceType == PieceType.King && board.PlyCount < 15) score += -50;
+            
+            //checks if move is a capture, the won material difference and if the piece can be captured from the target square
+            if (move.IsCapture && !capturePieceType.Equals(PieceType.King))
             {
                 var delta = pieceValues[(int)movePieceType] 
-                                        - pieceValues[(int)capturePieceType];
+                            - pieceValues[(int)capturePieceType];
                 if (board.SquareIsAttackedByOpponent(move.TargetSquare))
                 {
                     score += (delta >= 0 ? 8000 : 2000) + delta;
@@ -178,9 +253,15 @@ public class MyBot : IChessBot
 
     int Evaluate(Board board)
     {
-        int perspective = board.IsWhiteToMove ? 1 : -1;
         evaluatedPositions++;
-        var value = 0;
+        
+        
+        var perspective = board.IsWhiteToMove ? 1 : -1;
+        int whiteValue = 0, blackValue = 0,value = 0;
+        Piece blackKing = new(), whiteKing = new();
+        var ply = board.PlyCount;
+        var isEngame = ply > 30;
+        
         if (board.IsInCheckmate())
         {
             return infinity;
@@ -189,42 +270,88 @@ public class MyBot : IChessBot
         {
             return 0;
         }
-
-        //value += board.GetLegalMoves().Length * 5;
-        value += board.GetKingSquare(board.IsWhiteToMove).File == (6|2)? 20: 0;
-        value += getMaterialDifference(board);
-        
-        
-        return value*perspective;
-    }
-
-    
-    int getMaterialDifference(Board board)
-    {
-        var sum = 0;
         PieceList[] pieceLists = board.GetAllPieceLists();
-        for (int i = 0; i < pieceLists.Length-1; i++)
+        
+        for (int i = 0; i < pieceLists.Length; i++)
         {
-            if (i == 5) continue;
-            
-            sum += (i < 6) ? pieceLists[i].Count * pieceValues[i+1] : -pieceLists[i].Count * pieceValues[i-5];
+            foreach (var piece in pieceLists[i])
+            {
+                switch (i)
+                {
+                    case 0:
+                        //white pawn
+                        whiteValue += 100;
+                        //pawns should promote in endgame
+                        whiteValue += isEngame ? piece.Square.Rank * 2 : 0;
+                        break;
+                    case 1:
+                        //white knight
+                        whiteValue += 320;
+                        whiteValue += piece.Square.Rank == 0 ? -20 :0;
+                        break;
+                    case 2:
+                        //white bishop
+                        whiteValue += 330;
+                        whiteValue += piece.Square.Rank == 0 ? -20 :0;
+                        break;
+                    case 3:
+                        //white rook
+                        whiteValue += 500;
+                        break;
+                    case 4:
+                        //white queen
+                        whiteValue += 1100;
+                        break;
+                    case 5:
+                        //white king
+                        whiteKing = piece;
+                        whiteValue += ply < 10 && piece.Square.Equals(new Square("e1"))? 50:0;
+                        break;
+                    case 6:
+                        //black pawn
+                        blackValue += 100;
+                        blackValue += isEngame ? (7 - piece.Square.Rank) * 2 : 0;
+                        break;
+                    case 7:
+                        //black knight
+                        blackValue += 320;
+                        blackValue += piece.Square.Rank == 7 ? -20 :0;
+                        break;
+                    case 8:
+                        //black bishop
+                        blackValue += 330;
+                        blackValue += piece.Square.Rank == 7 ? -20 :0;
+                        break;
+                    case 9:
+                        //black rook
+                        blackValue += 500;
+                        break;
+                    case 10:
+                        //black queen
+                        blackValue += 1100;
+                        break;
+                    case 11:
+                        //black King
+                        blackKing = piece;
+                        blackValue += ply < 10 && piece.Square.Equals(new Square("e8"))? 50:0;
+
+                        break;
+                }
+            }
         }
-
-        return sum;
-    }
-
-    //creates a new entry in the transpostiontable at the index mod TT size
-    void store(ulong key,int value, Move move, byte depth, byte nodeType)
-    {
-        TranspositionTable[key % TranspositionTableEntries] = new TranspositionEntry
-            { Key = key, Value = value, Depth = depth};
+        //in the engame the kings should move towards each other to 
+        var distance = Math.Abs(whiteKing.Square.File - blackKing.Square.File) +
+                       Math.Abs(whiteKing.Square.Rank - blackKing.Square.Rank);
+        
+        value += isEngame ? 14 - distance*5:0;
+        return perspective * (whiteValue - blackValue) + value;
     }
 }
 
-public class TranspositionEntry
+public class TranspositionTableEntry
 {
     public ulong Key;
     public int Value;
     public byte Depth;
-    
+    public byte Flag;
 }
